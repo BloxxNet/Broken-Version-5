@@ -1,0 +1,336 @@
+<html lang="en"><head>
+  <meta charset="UTF-8">
+  <title>game_test - BloxxNet</title>
+  <link rel="icon" href="https://i.imgur.com/6OV3MCl.png">
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+    #playerFrame {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(128, 128, 128, 0.5);
+      color: white;
+      padding: 8px 12px;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      border-radius: 6px;
+      user-select: none;
+      pointer-events: none;
+      z-index: 1000;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+</head>
+<body>
+  <div id="playerFrame">TestAccount</div>
+<script>
+let scene, camera, renderer;
+let character, head, torso, rightArm, leftArm, rightLeg, leftLeg;
+let keys = {};
+let moveSpeed = 0.1;
+
+let cameraPivot, cameraDistance = 5;
+let cameraAngleX = 0;
+let cameraAngleY = 0;
+let isRightMouseDown = false;
+let prevMouse = {x: 0, y: 0};
+
+let pose = "Standing";
+let animationTime = 0;
+
+let velocityY = 0;
+let gravity = -0.02;
+let isGrounded = false;
+let respawnY = 5;
+
+let baseplate;
+
+let hitbox;
+
+let jumpRotationProgress = 0; // 0 to 1 for jump rotation anim
+let isJumpRotatingForward = false; // true when rotating forward in jump
+let isJumpRotatingBack = false;    // true when rotating back on land
+
+function init() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  let baseplateGeo = new THREE.BoxGeometry(50, 1, 50);
+  let baseplateMat = new THREE.MeshPhongMaterial({color: 0x228B22});
+  baseplate = new THREE.Mesh(baseplateGeo, baseplateMat);
+  baseplate.position.y = -0.5;
+  baseplate.receiveShadow = true;
+  scene.add(baseplate);
+
+  let light = new THREE.DirectionalLight(0xffffff, 1);
+  light.position.set(10, 20, 10);
+  scene.add(light);
+  scene.add(new THREE.AmbientLight(0x404040));
+
+  createCharacter();
+  initControls();
+}
+
+function createCharacter() {
+  character = new THREE.Group();
+
+  const armAndHeadColor = 0xf4cc43;
+  const torsoColor = 0x176baa;
+  const legsColor = 0xa5bc50;
+
+  let headGeo = new THREE.BoxGeometry(2, 1, 1);
+  let headMat = new THREE.MeshPhongMaterial({color: armAndHeadColor});
+  head = new THREE.Mesh(headGeo, headMat);
+  head.position.set(0, 3.5, 0);
+  character.add(head);
+
+  let torsoGeo = new THREE.BoxGeometry(2, 2, 1);
+  let torsoMat = new THREE.MeshPhongMaterial({color: torsoColor});
+  torso = new THREE.Mesh(torsoGeo, torsoMat);
+  torso.position.set(0, 2, 0);
+  character.add(torso);
+
+  let armGeo = new THREE.BoxGeometry(1, 2, 1);
+  armGeo.translate(0, -1, 0);
+  let armMat = new THREE.MeshPhongMaterial({color: armAndHeadColor});
+
+  rightArm = new THREE.Mesh(armGeo, armMat);
+  rightArm.position.set(-1.5, 3, 0);
+  character.add(rightArm);
+
+  leftArm = new THREE.Mesh(armGeo, armMat);
+  leftArm.position.set(1.5, 3, 0);
+  character.add(leftArm);
+
+  let legGeo = new THREE.BoxGeometry(1, 2, 1);
+  legGeo.translate(0, -1, 0);
+  let legMat = new THREE.MeshPhongMaterial({color: legsColor});
+
+  rightLeg = new THREE.Mesh(legGeo, legMat);
+  rightLeg.position.set(-0.5, 1, 0);
+  character.add(rightLeg);
+
+  leftLeg = new THREE.Mesh(legGeo, legMat);
+  leftLeg.position.set(0.5, 1, 0);
+  character.add(leftLeg);
+
+  scene.add(character);
+
+  cameraPivot = new THREE.Object3D();
+  character.add(cameraPivot);
+  cameraPivot.position.copy(head.position);
+  pivotNormalY = cameraPivot.position.y;
+  pivotTargetY = pivotNormalY;
+
+  character.position.set(0, respawnY, 0);
+
+  updateCamera();
+
+  hitbox = new THREE.Box3();
+}
+
+function respawn() {
+  scene.remove(character);
+  createCharacter();
+  velocityY = 0;
+  isGrounded = false;
+  pose = "Standing";
+  jumpRotationProgress = 0;
+  isJumpRotatingForward = false;
+  isJumpRotatingBack = false;
+}
+
+function initControls() {
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.code === 'Space' && isGrounded) {
+      velocityY = 0.35;
+      isGrounded = false;
+      pose = "Jumping";
+      pivotTargetY = pivotNormalY - 0.5; // Lower camera on jump
+
+      // Start jump rotation forward
+      isJumpRotatingForward = true;
+      isJumpRotatingBack = false;
+      jumpRotationProgress = 0;
+    }
+  });
+
+  window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+  window.addEventListener('mousedown', e => {
+    if (e.button === 2) {
+      isRightMouseDown = true;
+      prevMouse.x = e.clientX;
+      prevMouse.y = e.clientY;
+    }
+  });
+  window.addEventListener('mouseup', e => {
+    if (e.button === 2) isRightMouseDown = false;
+  });
+
+  window.addEventListener('mousemove', e => {
+    if (isRightMouseDown) {
+      let dx = e.clientX - prevMouse.x;
+      let dy = e.clientY - prevMouse.y;
+      cameraAngleY -= dx * 0.005;
+      cameraAngleX += dy * 0.005;
+      cameraAngleX = Math.max(-Math.PI/2 * 0.9, Math.min(Math.PI/2 * 0.9, cameraAngleX));
+      prevMouse.x = e.clientX;
+      prevMouse.y = e.clientY;
+    }
+  });
+
+  window.addEventListener('contextmenu', e => e.preventDefault());
+
+  window.addEventListener('wheel', e => {
+    cameraDistance += e.deltaY * 0.01;
+    cameraDistance = Math.min(Math.max(cameraDistance, 2), 10);
+  });
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+
+function updateCamera() {
+  let offset = new THREE.Vector3(
+    Math.sin(cameraAngleY) * Math.cos(cameraAngleX),
+    Math.sin(cameraAngleX),
+    Math.cos(cameraAngleY) * Math.cos(cameraAngleX)
+  );
+  offset.multiplyScalar(cameraDistance);
+
+  camera.position.copy(head.getWorldPosition(new THREE.Vector3())).add(offset);
+  camera.lookAt(head.getWorldPosition(new THREE.Vector3()));
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  let moveVec = new THREE.Vector3();
+  let forward = new THREE.Vector3();
+  camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
+  let right = new THREE.Vector3(); right.crossVectors(forward, new THREE.Vector3(0,1,0)).normalize();
+  if (keys['w']) moveVec.add(forward);
+  if (keys['s']) moveVec.addScaledVector(forward, -1);
+  if (keys['a']) moveVec.addScaledVector(right, -1);
+  if (keys['d']) moveVec.add(right);
+  if (moveVec.length() > 0) moveVec.normalize();
+
+  if (moveVec.length() > 0) {
+    let targetRot = Math.atan2(moveVec.x, moveVec.z);
+    let diff = targetRot - character.rotation.y;
+    if (diff > Math.PI) diff -= Math.PI * 2;
+    if (diff < -Math.PI) diff += Math.PI * 2;
+    character.rotation.y += diff * 0.12;
+
+    let forwardVec = new THREE.Vector3(0,0,1).applyEuler(character.rotation);
+    character.position.addScaledVector(forwardVec, moveSpeed);
+
+    if (pose !== "Jumping") pose = "Running";
+  } else {
+    if (pose !== "Jumping") pose = "Standing";
+  }
+
+  velocityY += gravity;
+  character.position.y += velocityY;
+
+  const baseplateHalfX = 25;
+  const baseplateHalfZ = 25;
+  let pos = character.position;
+  let onBaseplateX = pos.x > -baseplateHalfX && pos.x < baseplateHalfX;
+  let onBaseplateZ = pos.z > -baseplateHalfZ && pos.z < baseplateHalfZ;
+  let onBaseplate = onBaseplateX && onBaseplateZ;
+
+  if (pos.y <= 0 && onBaseplate) {
+    pos.y = 0;
+    velocityY = 0;
+    if (!isGrounded) {
+      isGrounded = true;
+      pose = "Standing";
+      pivotTargetY = pivotNormalY;
+
+      // Start jump rotation back smoothly on landing
+      isJumpRotatingBack = true;
+      isJumpRotatingForward = false;
+      jumpRotationProgress = 0;
+    }
+  } else {
+    isGrounded = false;
+  }
+
+  if (pos.y < -50) {
+    respawn();
+  }
+
+  animationTime += 0.02;
+
+  // Animations:
+  if (pose === "Running") {
+    let wave = Math.sin(animationTime * 4) * 0.5;
+    rightArm.rotation.x = wave;
+    leftArm.rotation.x = -wave;
+    rightLeg.rotation.x = -wave;
+    leftLeg.rotation.x = wave;
+  } else if (pose === "Jumping") {
+    rightArm.rotation.x = -Math.PI / 2;
+    leftArm.rotation.x = -Math.PI / 2;
+    rightLeg.rotation.x = 0;
+    leftLeg.rotation.x = 0;
+  } else {
+    let idleWave = Math.sin(animationTime * 0.4) * 0.1;
+    rightArm.rotation.x = idleWave;
+    leftArm.rotation.x = -idleWave;
+    rightLeg.rotation.x = 0;
+    leftLeg.rotation.x = 0;
+  }
+
+  // Jump Rotation Animation
+  if (isJumpRotatingForward) {
+    jumpRotationProgress += 0.04;
+    if (jumpRotationProgress >= 1) {
+      jumpRotationProgress = 1;
+      isJumpRotatingForward = false;
+    }
+    character.rotation.x = THREE.MathUtils.lerp(0, Math.PI, jumpRotationProgress);
+  } else if (isJumpRotatingBack) {
+    jumpRotationProgress += 0.04;
+    if (jumpRotationProgress >= 1) {
+      jumpRotationProgress = 0;
+      isJumpRotatingBack = false;
+      character.rotation.x = 0;
+    } else {
+      character.rotation.x = THREE.MathUtils.lerp(Math.PI, 0, jumpRotationProgress);
+    }
+  }
+
+  updateCamera();
+
+  // Update hitbox - LOWERED 1 stud down here
+  // Character base is roughly y=0, legs extend down 2 studs from pos.y=1
+  hitbox.min.set(
+    character.position.x - 1,
+    character.position.y - 3,   // was -2, now -3 (1 stud down)
+    character.position.z - 0.5
+  );
+  hitbox.max.set(
+    character.position.x + 1,
+    character.position.y + 3,
+    character.position.z + 0.5
+  );
+
+  renderer.render(scene, camera);
+}
+
+init();
+animate();
+</script>
+</body></html>
